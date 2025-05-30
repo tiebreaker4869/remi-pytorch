@@ -38,6 +38,12 @@ def parse_opt():
     parser.add_argument('--dict_path', type=str,
                         help='Decide using chord or not.', default='./dictionary/dictionary_REMI-tempo-checkpoint.pkl')
     
+    # validation opts
+    parser.add_argument('--val_freq', type=int,
+                        help='Validation frequency (every N epochs).', default=5)
+    parser.add_argument('--early_stop_patience', type=int,
+                        help='Early stopping patience.', default=5)
+    
     # testing opts
     parser.add_argument('--prompt', type=int,
                         help='0 for generating from scratch, 1 for continue generating.', default=False)
@@ -58,7 +64,7 @@ def parse_opt():
     return args
 
 class NewsDataset(Dataset):
-    def __init__(self, midi_l = [], dict_pth = './dictionary/dictionary_REMI-tempo-checkpoint.pkl'):
+    def __init__(self, train = True, midi_l = [], dict_pth = './dictionary/dictionary_REMI-tempo-checkpoint.pkl'):
         self.midi_l = midi_l
         self.tokenizer = REMI()
         self.checkpoint_path = dict_pth
@@ -66,6 +72,7 @@ class NewsDataset(Dataset):
         self.dictionary_path = dict_pth
         self.event2word, self.word2event = pickle.load(open(self.dictionary_path, 'rb'))
         self.parser = self.prepare_data(self.midi_l)
+        self.train = train
     
     def __len__(self):
         return len(self.parser)
@@ -90,11 +97,13 @@ class NewsDataset(Dataset):
         return events
         
     def prepare_data(self, midi_paths):
+        print(f'{len(midi_paths)} midis.')
         # extract events
         all_events = []
         for path in midi_paths:
             events = self.extract_events(path)
             all_events.append(events)
+        print(f'{len(all_events)} events.')
         # event to word
         all_words = []
         for events in all_events:
@@ -114,22 +123,23 @@ class NewsDataset(Dataset):
                         print('something is wrong! {}'.format(e))
             all_words.append(words)
         # to training data
-        self.group_size = 5
+        print(f'{len(all_words)} words.')
+        
+        # 去掉group机制，直接创建序列对
         segments = []
         for words in all_words:
-            pairs = []
-            for i in range(0, len(words)-self.x_len-1, self.x_len):
-                x = words[i:i+self.x_len]
-                y = words[i+1:i+self.x_len+1]
-                pairs.append([x, y])
-            pairs = np.array(pairs)
-            # abandon the last
-            for i in np.arange(0, len(pairs)-self.group_size, self.group_size*2):
-                data = pairs[i:i+self.group_size]
-                if len(data) == self.group_size:
-                    segments.append(data)
-        segments = np.array(segments)
-
+            if len(words) < self.x_len + 1:
+                continue  # 跳过太短的序列
+            
+            # 创建重叠的序列对
+            step_size = self.x_len // 2  # 50%重叠
+            for i in range(0, len(words) - self.x_len, step_size):
+                if i + self.x_len + 1 <= len(words):
+                    x = words[i:i + self.x_len]
+                    y = words[i + 1:i + self.x_len + 1]
+                    segments.append([x, y])
+        
+        segments = np.array(segments)  # 形状: (N, 2, 512)
         print(segments.shape)
         return segments
 
@@ -192,6 +202,37 @@ class Model(nn.Module):
         output_logit = self.linear(output)
         return output_logit
 
+def calculate_nll(model, dataloader, device, max_batches=None):
+    """Calculate negative log-likelihood on validation/test set"""
+    model.eval()
+    total_nll = 0.0
+    total_tokens = 0
+    batch_count = 0
+    
+    with torch.no_grad():
+        for i, batch in enumerate(tqdm(dataloader, desc="Calculating NLL")):
+            if max_batches and i >= max_batches:
+                break
+                
+            # 去掉group循环，直接处理
+            x = batch[:, 0, :].to(device).long()  # 输入序列
+            y = batch[:, 1, :].to(device).long()  # 目标序列
+            
+            output_logit = model(x)
+            
+            # Calculate cross-entropy loss (which is negative log-likelihood)
+            loss = nn.CrossEntropyLoss(reduction='sum')(output_logit.permute(0,2,1), y)
+            
+            total_nll += loss.item()
+            total_tokens += y.numel()  # Total number of tokens
+            batch_count += 1
+    
+    avg_nll = total_nll / total_tokens if total_tokens > 0 else float('inf')
+    perplexity = torch.exp(torch.tensor(avg_nll)).item()
+    
+    model.train()  # Set back to training mode
+    return avg_nll, perplexity, total_tokens
+
 def temperature_sampling(logits, temperature, topk):
         # probs = np.exp(logits / temperature) / np.sum(np.exp(logits / temperature))
         logits = torch.Tensor(logits)
@@ -211,6 +252,7 @@ def temperature_sampling(logits, temperature, topk):
     
 def test(prompt_path = './data/evaluation/000.midi', prompt = True, n_target_bar = 16,
          temperature = 1.2, topk = 5, output_path = '', model_path = ''):
+    device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
     
     # check path folder
     try:
@@ -224,6 +266,7 @@ def test(prompt_path = './data/evaluation/000.midi', prompt = True, n_target_bar
         checkpoint = torch.load(model_path)
         model = Model(checkpoint=opt.dict_path)
         model.load_state_dict(checkpoint['model'])
+        model = model.to(device)
         model.eval()
 
         test_data = NewsDataset(midi_l = [prompt_path], dict_pth = opt.dict_path)
@@ -272,16 +315,18 @@ def test(prompt_path = './data/evaluation/000.midi', prompt = True, n_target_bar
                 temp_x_new = np.zeros((batch_size, 1))
                 for b in range(batch_size):
                     temp_x_new[b][0] = words[b][-1]
+                temp_x = temp_x.cpu()
                 temp_x = np.array([np.append(temp_x[0], temp_x_new[0])])
             # model (prediction)
             temp_x = torch.Tensor(temp_x).long()
+            temp_x = temp_x.to(device)
             # temp_x = (1_batch, 4_length)
             # print('temp_x shape =', temp_x.shape)
             output_logits = model(temp_x)
             # print('output_logits shape =', output_logits.shape)
             # output_logits = output_logits.permute(0,2,1)
             # sampling
-            _logit = output_logits[0, -1].detach().numpy()
+            _logit = output_logits[0, -1].detach().cpu().numpy()
             # print('_logit shape =', _logit.shape)
             # break
 
@@ -316,14 +361,23 @@ def test(prompt_path = './data/evaluation/000.midi', prompt = True, n_target_bar
 def train(is_continue = False, checkpoints_path = ''):
     epochs = 200
     # create data list
-    train_list = glob.glob('./data/train/*.midi')
-    print('train list len =', len(train_list))
-    # dataset
-    train_dataset = NewsDataset(train_list, dict_pth = opt.dict_path)
-    # dataloader
+    all_train_list = glob.glob('./data/train/*.midi')
+    print('Total MIDI files:', len(all_train_list))
+    
+    # Split data into train and validation sets
+    train_list, val_list = train_test_split(all_train_list, test_size=0.1, random_state=42)
+    print('Train list len =', len(train_list))
+    print('Validation list len =', len(val_list))
+    
+    # datasets
+    train_dataset = NewsDataset(midi_l = train_list, dict_pth = opt.dict_path)
+    val_dataset = NewsDataset(midi_l = val_list, dict_pth = opt.dict_path)
+    
+    # dataloaders
     BATCH_SIZE = 4
     train_dataloader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle=True)
-    print('Dataloader is created')
+    val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle=False)
+    print('Dataloaders are created')
 
     if torch.cuda.is_available():
         print("Training on GPU")
@@ -337,6 +391,13 @@ def train(is_continue = False, checkpoints_path = ''):
         model = Model(checkpoint=opt.dict_path).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr = 0.0002)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=400000, eta_min=0.004*0.0002)
+        
+        # Initialize tracking variables
+        best_val_nll = float('inf')
+        patience_counter = 0
+        train_nlls = []
+        val_nlls = []
+        
     else:
         # wheather checkpoint_path is exist
         if os.path.isfile(checkpoints_path):
@@ -353,9 +414,12 @@ def train(is_continue = False, checkpoints_path = ''):
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=400000, eta_min=0.004*0.0002)
         scheduler.load_state_dict(checkpoint['scheduler'])
-
-
-    
+        
+        # Load tracking variables
+        best_val_nll = checkpoint.get('best_val_nll', float('inf'))
+        patience_counter = checkpoint.get('patience_counter', 0)
+        train_nlls = checkpoint.get('train_nlls', [])
+        val_nlls = checkpoint.get('val_nlls', [])
 
     print('Model is created \nStart training')
     
@@ -368,33 +432,109 @@ def train(is_continue = False, checkpoints_path = ''):
         pass
     
     for epoch in range(start_epoch, epochs+1):
+        # Training phase
         single_epoch = []
-        for i in tqdm(train_dataloader):
-            for g in range(5):
-                x = i[:, g, 0, :].to(device).long()
-                # x =(batch, 512)
-                y = i[:, g, 1, :].to(device).long()
-                output_logit = model(x)
-                # print(output_logit.shape, y.shape)
-                # output_logit = (4, 512(length), 274(vocab))
-                loss = nn.CrossEntropyLoss()(output_logit.permute(0,2,1), y)
-                loss.backward()
-                single_epoch.append(loss.to('cpu').mean().item())
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
-        single_epoch = np.array(single_epoch)
-        losses.append(single_epoch.mean())
-        print('>>> Epoch: {}, Loss: {:.5f}'.format(epoch,losses[-1]))
-        # torch.save(model.state_dict(), './checkpoints/epoch_%03d.pkl'%epoch)
-        torch.save({'epoch': epoch,
+        for i in tqdm(train_dataloader, desc=f"Epoch {epoch} Training"):
+            # 去掉group循环，直接处理
+            x = i[:, 0, :].to(device).long()  # 输入序列 (batch, 512)
+            y = i[:, 1, :].to(device).long()  # 目标序列 (batch, 512)
+            
+            output_logit = model(x)
+            # output_logit = (batch, 512, vocab_size)
+            
+            loss = nn.CrossEntropyLoss()(output_logit.permute(0,2,1), y)
+            loss.backward()
+            single_epoch.append(loss.to('cpu').mean().item())
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+        
+        # Calculate training NLL for this epoch
+        train_epoch_nll = np.array(single_epoch).mean()
+        losses.append(train_epoch_nll)
+        train_nlls.append(train_epoch_nll)
+        
+        print(f'>>> Epoch: {epoch}, Train NLL: {train_epoch_nll:.5f}')
+        
+        # Validation phase
+        if epoch % opt.val_freq == 0 or epoch == epochs:
+            print(f"Calculating validation NLL for epoch {epoch}...")
+            val_nll, val_perplexity, val_tokens = calculate_nll(model, val_dataloader, device, max_batches=50)
+            val_nlls.append(val_nll)
+            
+            print(f'>>> Epoch: {epoch}, Validation NLL: {val_nll:.5f}, Perplexity: {val_perplexity:.2f}')
+            print(f'>>> Evaluated on {val_tokens} tokens')
+            
+            # Early stopping check
+            if val_nll < best_val_nll:
+                best_val_nll = val_nll
+                patience_counter = 0
+                print(f'>>> New best validation NLL: {best_val_nll:.5f}')
+                # Save best model
+                best_model_path = './checkpoints/best_model.pkl'
+                torch.save({
+                    'epoch': epoch,
                     'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
-                    'loss': losses[-1],
-                    }, './checkpoints/123epoch_%03d.pkl'%epoch)
+                    'train_nll': train_epoch_nll,
+                    'val_nll': val_nll,
+                    'best_val_nll': best_val_nll,
+                    'patience_counter': patience_counter,
+                    'train_nlls': train_nlls,
+                    'val_nlls': val_nlls,
+                }, best_model_path)
+                print(f'>>> Best model saved to {best_model_path}')
+            else:
+                patience_counter += 1
+                print(f'>>> No improvement. Patience: {patience_counter}/{opt.early_stop_patience}')
+                
+                if patience_counter >= opt.early_stop_patience:
+                    print(f'>>> Early stopping triggered after {patience_counter} epochs without improvement')
+                    break
+        
+        # Save regular checkpoint
+        checkpoint_path = f'./checkpoints/epoch_{epoch:03d}.pkl'
+        torch.save({
+            'epoch': epoch,
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict(),
+            'train_nll': train_epoch_nll,
+            'val_nll': val_nlls[-1] if val_nlls else float('inf'),
+            'best_val_nll': best_val_nll,
+            'patience_counter': patience_counter,
+            'train_nlls': train_nlls,
+            'val_nlls': val_nlls,
+        }, checkpoint_path)
+        
+        # Save training history
+        np.save('training_nlls_history.npy', np.array(train_nlls))
+        np.save('validation_nlls_history.npy', np.array(val_nlls))
+        
+        # Print NLL summary every 10 epochs
+        if epoch % 10 == 0:
+            print("\n" + "="*80)
+            print(f"EPOCH {epoch} SUMMARY:")
+            print(f"Train NLL: {train_epoch_nll:.5f}")
+            if val_nlls:
+                print(f"Best Validation NLL: {best_val_nll:.5f}")
+                print(f"Current Validation NLL: {val_nlls[-1]:.5f}")
+            print(f"Patience Counter: {patience_counter}/{opt.early_stop_patience}")
+            print("="*80 + "\n")
+    
+    # Final summary
+    print("\n" + "="*80)
+    print("TRAINING COMPLETED!")
+    print(f"Total epochs trained: {epoch}")
+    print(f"Best validation NLL: {best_val_nll:.5f}")
+    print(f"Final train NLL: {train_nlls[-1]:.5f}")
+    if val_nlls:
+        print(f"Final validation NLL: {val_nlls[-1]:.5f}")
+    print("="*80)
+    
     losses = np.array(losses)
-    np.save('training_losses_his_from_77.npy', losses)
+    np.save('training_losses_final.npy', losses)
 
 def main(opt):
 
