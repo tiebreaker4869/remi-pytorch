@@ -4,6 +4,9 @@ Implement the pop-music transformer and integrate with hugging face API
 # Data preparation
 Please follow the steps in REMI. https://github.com/YatingMusic/remi
 
+# Patch Fix
+You may need to apply [this patch](https://github.com/ellemcfarlane/transformers/commit/29739e690bb3448e68914173fea56c1974fba1cb) if using recent versions of transformers library.
+
 # Training
 You can change `--dict_path` to specify whether using chord or not.
 
