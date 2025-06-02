@@ -2,9 +2,9 @@ import os
 import shutil
 
 # 源目录（POP909 根目录）
-source_dir = "data/POP909-Dataset"
+source_dir = "data/Pop1K7/midi_analyzed"
 # 目标目录（一级目录放置所有 MIDI 文件）
-target_dir = "data/POP909"
+target_dir = "data/POP1K7"
 
 # 创建目标目录
 os.makedirs(target_dir, exist_ok=True)

@@ -51,15 +51,15 @@ def parse_opt():
     
     # validation opts
     parser.add_argument('--val_freq', type=int,
-                        help='Validation frequency (every N epochs).', default=5)
+                        help='Validation frequency (every N epochs).', default=1)
     parser.add_argument('--early_stop_patience', type=int,
-                        help='Early stopping patience.', default=15)
+                        help='Early stopping patience.', default=5)
     
     # training hyperparameters
     parser.add_argument('--batch_size', type=int,
-                        help='Batch size.', default=32)
+                        help='Batch size.', default=8)
     parser.add_argument('--learning_rate', type=float,
-                        help='Learning rate.', default=0.001)
+                        help='Learning rate.', default=0.0002)
     parser.add_argument('--epochs', type=int,
                         help='Number of epochs.', default=5)
     
@@ -73,7 +73,7 @@ def parse_opt():
     parser.add_argument('--temperature', type=float,
                         help='Control the generate result.', default=1.0)
     parser.add_argument('--topk', type=int,
-                        help='Control the generate result.', default=10)
+                        help='Control the generate result.', default=5)
     parser.add_argument('--output_path', type=str,
                         help='output path', default='./results/lstm_from_scratch.midi')
     parser.add_argument('--model_path', type=str,
@@ -394,7 +394,7 @@ def train(is_continue=False, checkpoints_path=''):
     epochs = opt.epochs
     
     # Create data list
-    all_train_list = glob.glob('./data/POP909/*.mid')
+    all_train_list = glob.glob('./data/POP1K7/*.mid')
     print('Total MIDI files:', len(all_train_list))
     
     # Split data

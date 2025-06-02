@@ -40,7 +40,7 @@ def parse_opt():
     
     # validation opts
     parser.add_argument('--val_freq', type=int,
-                        help='Validation frequency (every N epochs).', default=5)
+                        help='Validation frequency (every N epochs).', default=1)
     parser.add_argument('--early_stop_patience', type=int,
                         help='Early stopping patience.', default=5)
     
@@ -214,9 +214,8 @@ def calculate_nll(model, dataloader, device, max_batches=None):
             if max_batches and i >= max_batches:
                 break
                 
-            # 去掉group循环，直接处理
-            x = batch[:, 0, :].to(device).long()  # 输入序列
-            y = batch[:, 1, :].to(device).long()  # 目标序列
+            x = batch[:, 0, :].to(device).long() 
+            y = batch[:, 1, :].to(device).long()
             
             output_logit = model(x)
             
@@ -356,12 +355,14 @@ def test(prompt_path = './data/evaluation/000.midi', prompt = True, n_target_bar
                 word2event=test_data.word2event,
                 output_path=output_path,
                 prompt_path=None)
+
+
     
 # train
 def train(is_continue = False, checkpoints_path = ''):
     epochs = 200
     # create data list
-    all_train_list = glob.glob('./data/train/*.midi')
+    all_train_list = glob.glob('./data/POP1K7/*.mid')
     print('Total MIDI files:', len(all_train_list))
     
     # Split data into train and validation sets
@@ -374,7 +375,7 @@ def train(is_continue = False, checkpoints_path = ''):
     val_dataset = NewsDataset(midi_l = val_list, dict_pth = opt.dict_path)
     
     # dataloaders
-    BATCH_SIZE = 4
+    BATCH_SIZE = 8
     train_dataloader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle=False)
     print('Dataloaders are created')

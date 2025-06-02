@@ -1,0 +1,5 @@
+pitch_density: Mean=0.0231, Median=0.0221, Min=0.0079, Max=0.1429, Std=0.0084, N=909
+pitch_range: Mean=53.3465, Median=53.0000, Min=29.0000, Max=80.0000, Std=6.9464, N=909
+avg_pitch_interval: Mean=6.5809, Median=6.4766, Min=3.4998, Max=11.0428, Std=0.8275, N=909
+note_density: Mean=6.9075, Median=6.6670, Min=3.4437, Max=16.0498, Std=1.6247, N=909
+avg_ioi: Mean=0.1505, Median=0.1489, Min=0.0622, Max=0.2885, Std=0.0311, N=909

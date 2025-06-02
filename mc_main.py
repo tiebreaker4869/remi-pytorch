@@ -399,7 +399,7 @@ def train_markov_model():
     print("Starting Markov Chain Training...")
     
     # Load training data
-    train_files = glob.glob('./data/POP909/*.mid')
+    train_files = glob.glob('./data/POP1K7/*.mid')
     print(f'Found {len(train_files)} training files')
     
     if len(train_files) == 0:
@@ -529,7 +529,7 @@ def compare_models():
     print("Comparing different Markov model configurations...")
     
     # Load data
-    train_files = glob.glob('./data/train/*.midi')[:100]  # Limit for quick comparison
+    train_files = glob.glob('./data/POP1K7/*.mid')[:100]  # Limit for quick comparison
     processor = REMIMarkovDataProcessor(opt.dict_path)
     sequences = processor.process_midi_files(train_files)
     

@@ -1,7 +1,10 @@
+import argparse
 from collections import Counter
 import pickle
 import glob
 import utils
+from tqdm import tqdm
+
 def extract_events(input_path, chord=True):
     note_items, tempo_items = utils.read_items(input_path)
     note_items = utils.quantize_items(note_items)
@@ -15,14 +18,26 @@ def extract_events(input_path, chord=True):
     events = utils.item2event(groups)
     return events
 
-all_elements= []
-for midi_file in glob.glob("./data/POP909/*.mid*", recursive=True):
-    events = extract_events(midi_file) # If you're analyzing chords, use `extract_events(midi_file, chord=True)`
-    for event in events:
-        element = '{}_{}'.format(event.name, event.value)
-        all_elements.append(element)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_dir', type=str, required=True, help='Directory containing MIDI files')
+    parser.add_argument('--output', type=str, required=True, help='Output path for dictionary pickle')
+    parser.add_argument('--with_chord', action='store_true', help='Whether to extract and include chord events')
+    args = parser.parse_args()
 
-counts = Counter(all_elements)
-event2word = {c: i for i, c in enumerate(counts.keys())}
-word2event = {i: c for i, c in enumerate(counts.keys())}
-pickle.dump((event2word, word2event), open('dictionary/pop909_dictionary.pkl', 'wb'))
+    all_elements = []
+    pattern = args.data_dir.rstrip('/') + '/*.mid*'
+    midi_files = glob.glob(pattern, recursive=True)
+    for midi_file in tqdm(midi_files, desc="Processing MIDI files"):
+        events = extract_events(midi_file, chord=args.with_chord)
+        for event in events:
+            element = '{}_{}'.format(event.name, event.value)
+            all_elements.append(element)
+
+    counts = Counter(all_elements)
+    event2word = {c: i for i, c in enumerate(counts.keys())}
+    word2event = {i: c for i, c in enumerate(counts.keys())}
+    pickle.dump((event2word, word2event), open(args.output, 'wb'))
+
+if __name__ == "__main__":
+    main()
