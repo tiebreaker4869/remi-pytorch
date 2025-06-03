@@ -6,7 +6,6 @@ import argparse
 def convert_midi_dir_to_wav(input_dir, output_dir, soundfont=None, sample_rate=44100):
     os.makedirs(output_dir, exist_ok=True)
     if soundfont is None:
-        # 可以改成你的 GM SoundFont 路径
         soundfont = "./resources/GeneralUser-GS/GeneralUser-GS.sf2"
         print(f"[Info] Using default soundfont: {soundfont}")
 

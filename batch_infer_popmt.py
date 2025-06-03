@@ -60,17 +60,14 @@ class Model(nn.Module):
         return output_logit
 
 def temperature_sampling(logits, temperature, topk, device):
-    """GPU优化的采样函数"""
     logits = logits / temperature
     
     if topk == 1:
         return torch.argmax(logits).item()
     else:
-        # 在GPU上进行top-k采样
         values, indices = torch.topk(logits, topk)
         probs = torch.softmax(values, dim=0)
         
-        # 在GPU上采样
         idx = torch.multinomial(probs, 1)
         return indices[idx].item()
 
@@ -79,41 +76,32 @@ class BatchMusicGenerator:
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {self.device}")
         
-        # 一次性加载模型和字典
         self.model, self.event2word, self.word2event = self._load_model(model_path, dict_path)
         
-        # 预计算常用的token集合
         self._precompute_tokens()
         
     def _load_model(self, model_path, dict_path):
-        """加载模型和字典"""
         print("Loading model and dictionary...")
         
-        # 加载checkpoint
         checkpoint = torch.load(model_path, map_location=self.device)
         
-        # 创建模型
         model = Model(checkpoint=dict_path)
         model.load_state_dict(checkpoint['model'])
         model = model.to(self.device)
         model.eval()
         
-        # 关闭梯度计算以节省内存
         for param in model.parameters():
             param.requires_grad = False
         
-        # 加载字典
         event2word, word2event = pickle.load(open(dict_path, 'rb'))
         
         print(f"Model loaded successfully! Vocab size: {len(event2word)}")
         return model, event2word, word2event
     
     def _precompute_tokens(self):
-        """预计算常用token，提高效率"""
         self.bar_token = self.event2word['Bar_None']
         self.position_token = self.event2word['Position_1/16']
         
-        # 预计算tempo相关tokens
         self.tempo_classes = torch.tensor([
             v for k, v in self.event2word.items() if 'Tempo Class' in k
         ], device=self.device)
@@ -122,7 +110,6 @@ class BatchMusicGenerator:
             v for k, v in self.event2word.items() if 'Tempo Value' in k
         ], device=self.device)
         
-        # 检查是否有chord
         self.has_chord = 'chord' in self.model.checkpoint_path.lower()
         if self.has_chord:
             self.chord_tokens = torch.tensor([
@@ -130,16 +117,13 @@ class BatchMusicGenerator:
             ], device=self.device)
     
     def _initialize_sequence(self):
-        """初始化生成序列"""
         words = [self.bar_token, self.position_token]
         
         if self.has_chord:
-            # 随机选择chord
             chord_idx = torch.randint(0, len(self.chord_tokens), (1,), device=self.device)
             words.append(self.chord_tokens[chord_idx].item())
             words.append(self.position_token)
         
-        # 随机选择tempo
         tempo_class_idx = torch.randint(0, len(self.tempo_classes), (1,), device=self.device)
         tempo_value_idx = torch.randint(0, len(self.tempo_values), (1,), device=self.device)
         
@@ -149,7 +133,6 @@ class BatchMusicGenerator:
         return words
     
     def generate_single(self, n_target_bar=16, temperature=1.2, topk=5, seed=None):
-        """生成单首音乐（GPU优化版本）"""
         if seed is not None:
             torch.manual_seed(seed)
             np.random.seed(seed)
@@ -178,14 +161,12 @@ class BatchMusicGenerator:
                 if sequence.size(1) > 1024:
                     sequence = sequence[:, -512:]
         
-        # 返回生成的序列（去除初始部分）
         generated_tokens = sequence[0, original_length:].cpu().numpy().tolist()
         return generated_tokens
     
     def batch_generate(self, num_pieces, n_target_bar=16, temperature=1.2, 
                       topk=5, output_dir='./gpu_batch_results', 
                       save_interval=10, seed=42):
-        """批量生成音乐"""
         
         os.makedirs(output_dir, exist_ok=True)
         
@@ -194,19 +175,16 @@ class BatchMusicGenerator:
         print(f"Temperature: {temperature}, Top-k: {topk}")
         print("-" * 60)
         
-        # 统计信息
         total_time = 0
         successful = 0
         failed = 0
         
-        # 生成循环
         pbar = tqdm(range(num_pieces), desc="Generating")
         
         for i in pbar:
             start_time = time.time()
             
             try:
-                # 生成音乐
                 generated_tokens = self.generate_single(
                     n_target_bar=n_target_bar,
                     temperature=temperature,
@@ -214,7 +192,6 @@ class BatchMusicGenerator:
                     seed=seed + i
                 )
                 
-                # 保存MIDI文件
                 output_path = os.path.join(output_dir, f"generated_{i:06d}.midi")
                 utils.write_midi(
                     words=generated_tokens,
@@ -227,7 +204,6 @@ class BatchMusicGenerator:
                 generation_time = time.time() - start_time
                 total_time += generation_time
                 
-                # 更新进度条
                 avg_time = total_time / (i + 1)
                 pbar.set_postfix({
                     'Success': successful,
@@ -240,13 +216,11 @@ class BatchMusicGenerator:
                 failed += 1
                 print(f"\nError generating piece {i}: {e}")
                 
-            # 定期清理GPU缓存
             if (i + 1) % save_interval == 0:
                 torch.cuda.empty_cache()
         
         pbar.close()
         
-        # 最终统计
         print("\n" + "="*60)
         print("BATCH GENERATION COMPLETED!")
         print(f"Successful: {successful}/{num_pieces}")
