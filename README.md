@@ -36,3 +36,6 @@ python main.py --is_train 0 \
 --output_path your-path-here \
 --model_path your-path-here
 ```
+
+## Acknowledgement
+The main body of this repository is from [Lonian6/remi-pytorch](https://github.com/Lonian6/remi-pytorch).
