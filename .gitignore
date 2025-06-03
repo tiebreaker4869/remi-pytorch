@@ -2,3 +2,6 @@ data
 *.npy
 *.log
 checkpoints/*
+resources
+.ipynb_checkpoints
+generated_*
